@@ -3,21 +3,27 @@ name = "serde_de_chain"
 version = "0.1.0"
 authors = ["Clifford T. Matthews <clifford.t.matthews@gmail.com>"]
 description = """
-A macro to declare an enum which can be deserialized normally or deserialized
-from a previous representation. Previous representations can be chained
-indefinitely. Chaining representations may be easier to maintain than having
-a single untagged enum that encompasses multiple representations.
+A derive macro that lets a struct or enum be deserialized normally or, on
+failure, from a previous representation. Previous representations can be
+chained indefinitely. Chaining representations may be easier to maintain
+than having a single untagged enum that encompasses multiple representations.
 """
 edition = "2024"
-keywords = ["serde", "legacy", "enum", "backward", "compatibility"]
+keywords = ["serde", "legacy", "backward", "compatibility", "derive"]
 categories = ["encoding", "parsing", "rust-patterns"]
 repository = "https://github.com/ctm/serde_de_chain"
 license = "Unlicense OR MIT"
 readme = "README.md"
 publish = false
 
+[lib]
+proc-macro = true
+
 [dependencies]
-serde = { version = "1.0.228", default-features = false, features = ["alloc", "derive"] }
+proc-macro2 = "1"
+quote = "1"
+syn = { version = "2", features = ["full"] }
 
 [dev-dependencies]
+serde = { version = "1.0.228", default-features = false, features = ["alloc", "derive"] }
 serde_json = { version = "1.0.150", default-features = false, features = ["alloc"] }

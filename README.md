@@ -1,8 +1,10 @@
 # serde_de_chain
 
-Provides the `serde_de_chain!` macro that declares an enum in such a way
-that it can be deserialized from historical representations that are
-different from how it is currently declared.
+Provides the `SerdeDeChain` derive macro that lets a struct or enum be
+deserialized normally or, on failure, from a previous representation.
+Apply `#[derive(SerdeDeChain)]` together with `#[serde_de_chain(OldType)]`
+and provide `impl From<OldType> for Self`. If `OldType` itself derives
+`SerdeDeChain`, the chain extends indefinitely.
 
 I wrote this because Mb2, a closed-source poker server and client,
 uses `jsonb` columns to record various messages that are passed back
@@ -13,4 +15,4 @@ create problems for returning hand histories.
 So far, I haven't found a better way to do what I want to do, so I
 created this crate.
 
-See the documentation and the tests inside src/lib.rs for more info.
+See `tests/integration.rs` for usage examples.

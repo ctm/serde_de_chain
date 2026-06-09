@@ -1,287 +1,192 @@
-/// Declares an enum that also has an older representation.
-///
-/// Serde deserialization will attempt to deserialize using the
-/// representation declared, but if that fails, the older
-/// representation will be tried.  For this to work, you must
-/// implement `From<new> for old`.  The older representation can
-/// also be declared via `serde_de_chain`, in which case the deserialization
-/// chain will be extended.
-///
-/// # Parameters
-/// * `attr` - Zero or more attribute blocks, e.g., `#[derive(Debug, Eq, PartialEq)]`
-/// * `vis` - Visibility, which can be blank, `pub`, etc.
-/// * `new` - The identifier for the enum you're defining
-/// * `old` - The identifier of the previous representation
-/// * `variants` - A comma separated list of variants for this enum
-///
-/// # Examples
-/// This snippet from the tests illustrates the syntax and
-/// chaining.
-///
-/// The current representation is called `Report`, with the
-/// previous version being `ReportV1` and an original representation
-/// being `ReportV0`.  Trying to deserialize a
-/// `serde_json::Value` that is in `ReportV0` form into a `Report`
-/// succeeds, due `Report` deserialization failing, which then falls
-/// back to `ReportV1` deserialization failing which then fails back
-/// to `ReportV0` deserialization.
-/// ```
-/// # use serde::{Deserialize, Serialize};
-/// #
-/// # #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
-/// # struct Year(u16);
-/// #
-/// # #[derive(Clone, Copy, Debug, Deserialize, Ord, PartialEq, PartialOrd, Serialize, Eq, Hash)]
-/// # struct PlayerId(i32);
-/// #
-/// # #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-/// # enum ReportSpan {
-/// #     All,
-/// #     YearToDate,
-/// #     MonthToDate,
-/// #     WeekToDate,
-/// #     OneYear,
-/// #     OneMonth,
-/// #     OneWeek,
-/// # }
-/// #
-/// use serde_de_chain::serde_de_chain;
-///
-/// serde_de_chain! {
-///     #[derive(Debug, Eq, PartialEq)]
-///     enum Report <- ReportV1 {
-///         LeaderboardWSOPS(Year, Option<PlayerId>, ReportSpan),
-///         LeaderboardWYWAB(Year, Option<PlayerId>, ReportSpan),
-///         LeaderboardWYWAE(Year, Option<PlayerId>, ReportSpan),
-///     }
-/// }
-///
-/// impl From<ReportV1> for Report {
-///     fn from(v: ReportV1) -> Self {
-///         use {Report as O, ReportV1::*};
-///
-///         match v {
-///             LeaderboardWSOPS(year, pid, span) => O::LeaderboardWSOPS(year, pid, span),
-///             LeaderboardWYWAB2024(pid, span) => O::LeaderboardWYWAB(Year(2024), pid, span),
-///             LeaderboardWYWAE2025(pid, span) => O::LeaderboardWYWAB(Year(2025), pid, span),
-///             LeaderboardWYWAE2026(pid, span) => O::LeaderboardWYWAE(Year(2026), pid, span),
-///         }
-///     }
-/// }
-///
-/// serde_de_chain! {
-///     #[derive(Debug, Eq, PartialEq)]
-///     enum ReportV1 <- ReportV0 {
-///         LeaderboardWSOPS(Year, Option<PlayerId>, ReportSpan),
-///         LeaderboardWYWAB2024(Option<PlayerId>, ReportSpan),
-///         LeaderboardWYWAE2025(Option<PlayerId>, ReportSpan),
-///         LeaderboardWYWAE2026(Option<PlayerId>, ReportSpan),
-///     }
-/// }
-///
-/// impl From<ReportV0> for ReportV1 {
-///     fn from(v: ReportV0) -> Self {
-///         use {ReportV0::*, ReportV1 as O};
-///
-///         match v {
-///             LeaderboardWSOPS2022(pid, span) => O::LeaderboardWSOPS(Year(2022), pid, span),
-///             LeaderboardWSOPS2023(pid, span) => O::LeaderboardWSOPS(Year(2023), pid, span),
-///             LeaderboardWSOPS2024(pid, span) => O::LeaderboardWSOPS(Year(2024), pid, span),
-///             LeaderboardWSOPS2025(pid, span) => O::LeaderboardWSOPS(Year(2025), pid, span),
-///             LeaderboardWSOPS2026(pid, span) => O::LeaderboardWSOPS(Year(2026), pid, span),
-///             LeaderboardWYWAB2024(pid, span) => O::LeaderboardWYWAB2024(pid, span),
-///             LeaderboardWYWAE2025(pid, span) => O::LeaderboardWYWAE2025(pid, span),
-///             LeaderboardWYWAE2026(pid, span) => O::LeaderboardWYWAE2026(pid, span),
-///         }
-///     }
-/// }
-///
-/// #[derive(Debug, Deserialize, Eq, PartialEq)]
-/// enum ReportV0 {
-///     LeaderboardWSOPS2022(Option<PlayerId>, ReportSpan),
-///     LeaderboardWSOPS2023(Option<PlayerId>, ReportSpan),
-///     LeaderboardWSOPS2024(Option<PlayerId>, ReportSpan),
-///     LeaderboardWSOPS2025(Option<PlayerId>, ReportSpan),
-///     LeaderboardWSOPS2026(Option<PlayerId>, ReportSpan),
-///     LeaderboardWYWAB2024(Option<PlayerId>, ReportSpan),
-///     LeaderboardWYWAE2025(Option<PlayerId>, ReportSpan),
-///     LeaderboardWYWAE2026(Option<PlayerId>, ReportSpan),
-/// }
-/// ```
-#[macro_export]
-macro_rules! serde_de_chain {
-    (
-        $(#[$attr:meta])*
-        $vis:vis enum $new:ident <- $old:ident { $($variants:tt)* }
-    ) => {
-        $(#[$attr])*
-        $vis enum $new {
-            $($variants)*
-        }
+//! Derive macro that lets a type be deserialized from its current
+//! representation or, if that fails, from a previous representation.
+//!
+//! Apply `#[derive(SerdeDeChain)]` together with
+//! `#[serde_de_chain(OldType)]` to a struct or enum and provide
+//! `impl From<OldType> for Self`. Deserialization will first try the
+//! current representation; on failure it falls back to `OldType`'s
+//! `Deserialize` implementation. If `OldType` itself derives
+//! `SerdeDeChain`, the chain extends transparently.
+//!
+//! See `tests/integration.rs` for end-to-end examples.
 
-        impl<'de> serde::Deserialize<'de> for $new {
-            fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-                #[derive(serde::Deserialize)]
-                enum New {
-                    $($variants)*
-                }
+extern crate proc_macro;
 
-                #[derive(serde::Deserialize)]
-                #[serde(untagged)]
-                enum NewOld {
-                    New(New),
-                    Old($old),
-                }
+use proc_macro::TokenStream;
+use proc_macro2::TokenStream as TokenStream2;
+use quote::{format_ident, quote};
+use syn::{
+    Attribute, Data, DataEnum, DataStruct, DeriveInput, Fields, Ident, Type, parse_macro_input,
+};
 
-                NewOld::deserialize(deserializer).map(|v| match v {
-                    NewOld::New(new) => unsafe { std::mem::transmute(new) },
-                    NewOld::Old(old) => old.into(),
-                })
-            }
-        }
-    };
+#[proc_macro_derive(SerdeDeChain, attributes(serde_de_chain))]
+pub fn derive_serde_de_chain(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    expand(input)
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
 }
 
-#[cfg(test)]
-mod tests {
-    use serde::{Deserialize, Serialize};
+fn expand(input: DeriveInput) -> syn::Result<TokenStream2> {
+    let name = &input.ident;
+    let old_type = parse_old_type(&input)?;
+    let serde_attrs: Vec<&Attribute> = input
+        .attrs
+        .iter()
+        .filter(|a| a.path().is_ident("serde"))
+        .collect();
+    let shadow_ident = format_ident!("__SerdeDeChainShadow");
 
-    #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
-    struct Year(u16);
-
-    #[derive(Clone, Copy, Debug, Deserialize, Ord, PartialEq, PartialOrd, Serialize, Eq, Hash)]
-    struct PlayerId(i32);
-
-    #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-    enum ReportSpan {
-        All,
-        YearToDate,
-        MonthToDate,
-        WeekToDate,
-        OneYear,
-        OneMonth,
-        OneWeek,
-    }
-
-    serde_de_chain! {
-        #[derive(Debug, Eq, PartialEq)]
-        enum Report <- ReportV1 {
-            #[allow(dead_code)]
-            LeaderboardWSOPS(Year, Option<PlayerId>, ReportSpan),
-            #[allow(dead_code)]
-            LeaderboardWYWAB(Year, Option<PlayerId>, ReportSpan),
-            #[allow(dead_code)]
-            LeaderboardWYWAE(Year, Option<PlayerId>, ReportSpan),
+    let (shadow_def, conversion) = match &input.data {
+        Data::Enum(data) => (
+            enum_shadow(data, &serde_attrs, &shadow_ident),
+            enum_conversion(data, &shadow_ident),
+        ),
+        Data::Struct(data) => (
+            struct_shadow(data, &serde_attrs, &shadow_ident),
+            struct_conversion(data),
+        ),
+        Data::Union(_) => {
+            return Err(syn::Error::new_spanned(
+                &input.ident,
+                "SerdeDeChain does not support unions",
+            ));
         }
-    }
+    };
 
-    impl From<ReportV1> for Report {
-        fn from(v: ReportV1) -> Self {
-            use {Report as O, ReportV1::*};
+    Ok(quote! {
+        #[automatically_derived]
+        impl<'de> ::serde::Deserialize<'de> for #name {
+            fn deserialize<__D>(
+                deserializer: __D,
+            ) -> ::core::result::Result<Self, <__D as ::serde::Deserializer<'de>>::Error>
+            where
+                __D: ::serde::Deserializer<'de>,
+            {
+                #shadow_def
 
-            match v {
-                LeaderboardWSOPS(year, pid, span) => O::LeaderboardWSOPS(year, pid, span),
-                LeaderboardWYWAB2024(pid, span) => O::LeaderboardWYWAB(Year(2024), pid, span),
-                LeaderboardWYWAE2025(pid, span) => O::LeaderboardWYWAB(Year(2025), pid, span),
-                LeaderboardWYWAE2026(pid, span) => O::LeaderboardWYWAE(Year(2026), pid, span),
+                #[derive(::serde::Deserialize)]
+                #[serde(untagged)]
+                enum __SerdeDeChainNewOld {
+                    New(#shadow_ident),
+                    Old(#old_type),
+                }
+
+                <__SerdeDeChainNewOld as ::serde::Deserialize>::deserialize(deserializer).map(
+                    |__v| match __v {
+                        __SerdeDeChainNewOld::New(new) => #conversion,
+                        __SerdeDeChainNewOld::Old(old) => ::core::convert::From::from(old),
+                    },
+                )
             }
         }
-    }
+    })
+}
 
-    serde_de_chain! {
-        #[derive(Debug, Eq, PartialEq)]
-        enum ReportV1 <- ReportV0 {
-            #[allow(dead_code)]
-            LeaderboardWSOPS(Year, Option<PlayerId>, ReportSpan),
-            #[allow(dead_code)]
-            LeaderboardWYWAB2024(Option<PlayerId>, ReportSpan),
-            #[allow(dead_code)]
-            LeaderboardWYWAE2025(Option<PlayerId>, ReportSpan),
-            #[allow(dead_code)]
-            LeaderboardWYWAE2026(Option<PlayerId>, ReportSpan),
+fn parse_old_type(input: &DeriveInput) -> syn::Result<Type> {
+    let mut found: Option<Type> = None;
+    for attr in &input.attrs {
+        if attr.path().is_ident("serde_de_chain") {
+            if found.is_some() {
+                return Err(syn::Error::new_spanned(
+                    attr,
+                    "duplicate #[serde_de_chain(...)] attribute",
+                ));
+            }
+            found = Some(attr.parse_args::<Type>()?);
         }
     }
+    found.ok_or_else(|| {
+        syn::Error::new_spanned(
+            &input.ident,
+            "SerdeDeChain requires #[serde_de_chain(OldType)]",
+        )
+    })
+}
 
-    impl From<ReportV0> for ReportV1 {
-        fn from(v: ReportV0) -> Self {
-            use {ReportV0::*, ReportV1 as O};
-
-            match v {
-                LeaderboardWSOPS2022(pid, span) => O::LeaderboardWSOPS(Year(2022), pid, span),
-                LeaderboardWSOPS2023(pid, span) => O::LeaderboardWSOPS(Year(2023), pid, span),
-                LeaderboardWSOPS2024(pid, span) => O::LeaderboardWSOPS(Year(2024), pid, span),
-                LeaderboardWSOPS2025(pid, span) => O::LeaderboardWSOPS(Year(2025), pid, span),
-                LeaderboardWSOPS2026(pid, span) => O::LeaderboardWSOPS(Year(2026), pid, span),
-                LeaderboardWYWAB2024(pid, span) => O::LeaderboardWYWAB2024(pid, span),
-                LeaderboardWYWAE2025(pid, span) => O::LeaderboardWYWAE2025(pid, span),
-                LeaderboardWYWAE2026(pid, span) => O::LeaderboardWYWAE2026(pid, span),
-            }
+fn enum_shadow(data: &DataEnum, serde_attrs: &[&Attribute], shadow: &Ident) -> TokenStream2 {
+    let variants = &data.variants;
+    quote! {
+        #[derive(::serde::Deserialize)]
+        #(#serde_attrs)*
+        enum #shadow {
+            #variants
         }
     }
+}
 
-    #[derive(Debug, Deserialize, Eq, PartialEq)]
-    enum ReportV0 {
-        LeaderboardWSOPS2022(Option<PlayerId>, ReportSpan),
-        LeaderboardWSOPS2023(Option<PlayerId>, ReportSpan),
-        LeaderboardWSOPS2024(Option<PlayerId>, ReportSpan),
-        LeaderboardWSOPS2025(Option<PlayerId>, ReportSpan),
-        LeaderboardWSOPS2026(Option<PlayerId>, ReportSpan),
-        LeaderboardWYWAB2024(Option<PlayerId>, ReportSpan),
-        LeaderboardWYWAE2025(Option<PlayerId>, ReportSpan),
-        LeaderboardWYWAE2026(Option<PlayerId>, ReportSpan),
+fn struct_shadow(data: &DataStruct, serde_attrs: &[&Attribute], shadow: &Ident) -> TokenStream2 {
+    match &data.fields {
+        Fields::Named(fields) => quote! {
+            #[derive(::serde::Deserialize)]
+            #(#serde_attrs)*
+            struct #shadow #fields
+        },
+        Fields::Unnamed(fields) => quote! {
+            #[derive(::serde::Deserialize)]
+            #(#serde_attrs)*
+            struct #shadow #fields;
+        },
+        Fields::Unit => quote! {
+            #[derive(::serde::Deserialize)]
+            #(#serde_attrs)*
+            struct #shadow;
+        },
     }
+}
 
-    fn test<T: std::fmt::Debug + PartialEq + for<'de> serde::Deserialize<'de>>(
-        v: serde_json::Value,
-        expected: T,
-    ) {
-        match serde_json::from_value::<T>(v) {
-            Err(e) => {
-                panic!("{e:?}");
+fn enum_conversion(data: &DataEnum, shadow: &Ident) -> TokenStream2 {
+    let arms = data.variants.iter().map(|v| {
+        let variant = &v.ident;
+        match &v.fields {
+            Fields::Named(fields) => {
+                let names: Vec<&Ident> = fields
+                    .named
+                    .iter()
+                    .map(|f| f.ident.as_ref().unwrap())
+                    .collect();
+                quote! {
+                    #shadow::#variant { #(#names),* } => Self::#variant { #(#names),* }
+                }
             }
-            Ok(r) => {
-                assert_eq!(r, expected);
+            Fields::Unnamed(fields) => {
+                let binds: Vec<Ident> = (0..fields.unnamed.len())
+                    .map(|i| format_ident!("__f{}", i))
+                    .collect();
+                quote! {
+                    #shadow::#variant(#(#binds),*) => Self::#variant(#(#binds),*)
+                }
             }
+            Fields::Unit => quote! {
+                #shadow::#variant => Self::#variant
+            },
+        }
+    });
+    quote! {
+        match new {
+            #(#arms,)*
         }
     }
+}
 
-    #[test]
-    fn v0() {
-        test::<ReportV0>(
-            serde_json::json!({
-                "LeaderboardWYWAE2025": [10, "All"]
-            }),
-            ReportV0::LeaderboardWYWAE2025(Some(PlayerId(10)), ReportSpan::All),
-        );
-    }
-
-    #[test]
-    fn v1() {
-        test::<ReportV1>(
-            serde_json::json!({
-            "LeaderboardWSOPS": [2026, 10, "All"]
-            }),
-            ReportV1::LeaderboardWSOPS(Year(2026), Some(PlayerId(10)), ReportSpan::All),
-        );
-    }
-
-    #[test]
-    fn v0_as_v1() {
-        test::<ReportV1>(
-            serde_json::json!({
-                "LeaderboardWSOPS2026": [10, "All"]
-            }),
-            ReportV1::LeaderboardWSOPS(Year(2026), Some(PlayerId(10)), ReportSpan::All),
-        );
-    }
-
-    #[test]
-    fn v0_as_report() {
-        test::<Report>(
-            serde_json::json!({
-                "LeaderboardWSOPS2026": [10, "All"]
-            }),
-            Report::LeaderboardWSOPS(Year(2026), Some(PlayerId(10)), ReportSpan::All),
-        );
+fn struct_conversion(data: &DataStruct) -> TokenStream2 {
+    match &data.fields {
+        Fields::Named(fields) => {
+            let names: Vec<&Ident> = fields
+                .named
+                .iter()
+                .map(|f| f.ident.as_ref().unwrap())
+                .collect();
+            quote! {
+                Self { #(#names: new.#names),* }
+            }
+        }
+        Fields::Unnamed(fields) => {
+            let indices: Vec<syn::Index> = (0..fields.unnamed.len()).map(syn::Index::from).collect();
+            quote! {
+                Self(#(new.#indices),*)
+            }
+        }
+        Fields::Unit => quote! { Self },
     }
 }
